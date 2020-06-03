@@ -1,0 +1,280 @@
+#Main_imgReg is meant for exploration and image recognition, implemented with multi-threading and uses Pi camera for image capture
+from AndroidConnection import *
+from PCConnection import *
+from ArduinoConnection import *
+#from processedimage import *
+
+import Queue as queue
+from picamera.array import PiRGBArray
+from picamera import PiCamera
+import numpy as np
+
+import sys
+import time
+import threading
+
+import cv2
+
+camera = PiCamera()
+camera.resolution= (640,480)
+
+class RPi(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.debug = False
+        
+        self.iconQueue = queue.Queue()
+        #Initialize individual components 
+        self.android_thread = bluetooth()
+        self.pc_thread = pcComm()
+        self.arduino_thread = arduino()
+        #self.imageRecognition = processing()
+
+        self.android_thread.initialize_bluetooth()
+        self.pc_thread.init_pc_comm()
+        self.arduino_thread.init_ser()
+
+        time.sleep(2)
+
+    def picCapture(self, debug):
+        self.imgTaken += 1
+        self.captureFormat = PiRGBArray(self.camera, size=(1024, 768))
+        self.camera.capture(self.captureFormat, format="bgr", use_video_port=True)
+        time.sleep(0.1)
+        img = self.captureFormat.array
+
+        #To make image brighter
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        value = 80
+        h,s,v = cv2.split(hsv)
+        lim = 255 - value
+        v[v > lim] = 255
+        v[v <= lim] += value
+        final_hsv = cv2.merge((h, s, v))
+        img = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)
+
+        if (debug):
+            cv2.imwrite("debug/" + str(self.imgTaken) + "raw.png", img)
+        
+        self.captureFormat.truncate(0)
+        return img
+    
+    def iconRecognition(self):
+        try:
+            while True:
+                if not (self.iconQueue.empty()):
+                    thisJob = self.iconQueue.get()
+
+                    print("ArrowRecog: Processing job X=" + str(thisJob[0]) + ", Y=" + str(thisJob[1]) + ", Face=" + str(thisJob[2]))
+                    detect = imgRecogMod.ScanArrow(self.debug, thisJob[3])
+
+                    print("ArrowRecog: Detection results %s" % detect)
+                    detectSplit = detect.split('|')
+                    detectSplit = [int(i) for i in detectSplit]
+
+                    if (detectSplit[0] == 1):
+                        direction = self.findIconDirection(thisJob[2])
+                        position = self.findIconPosition(thisJob[0], thisJob[1], thisJob[2], detectSplit[1], detectSplit[2])
+                        print('[ICON_INFO] Arrow at: X = ' + str(position[0]) + ', Y = ' + str(position[1]) + ', direction = ' + direction)
+
+                        icon = self.iconCoordinateFormat(position[0], position[1], direction.lower())
+                        self.writeToAndroid(icon + "\r\n")
+
+                time.sleep(0.1)
+
+        except Exception as e:
+            print("[ICON_ERROR] Image recognition error: " + str(e))
+    
+    def iconCoordinateFormat(self, x, y, direction):
+        iconPlace = {"x": x, "y": y, "face": direction}
+        icon = {"icon": [data]}
+        return json.dumps(icon)
+    
+    def findIconDirection(self, face):
+        if (face == 0):
+            return 'DOWN'
+
+        elif (face == 1):
+            return 'UP'
+
+        elif (face == 2):
+            return 'RIGHT'
+
+        elif (face == 3):
+            return 'LEFT'
+
+        return 'UNKNOWN'
+        
+    def findIconPosition(self, robotX, robotY, robotFace, scanSection, scanGridDistance):
+        if (robotFace == 0):
+            if (scanSection == 0):
+                return [robotX - 1, robotY + scanGridDistance]
+
+            elif (scanSection == 1):
+                return [robotX, robotY + scanGridDistance]
+
+            elif (scanSection == 2):
+                return [robotX + 1, robotY + scanGridDistance]
+
+        elif (robotFace == 1):
+            if (scanSection == 0):
+                return [robotX + 1, robotY - scanGridDistance]
+
+            elif (scanSection == 1):
+                return [robotX, robotY - scanGridDistance]
+
+            elif (scanSection == 2):
+                return [robotX - 1, robotY - scanGridDistance]
+
+        elif (robotFace == 2):
+            if (scanSection == 0):
+                return [robotX-scanGridDistance, robotY-1]
+
+            elif (scanSection == 1):
+                return [robotX-scanGridDistance, robotY]
+
+            elif (scanSection == 2):
+                return [robotX-scanGridDistance, robotY+1]
+
+        elif (robotFace == 3):
+            if (scanSection == 0):
+                return [robotX+scanGridDistance, robotY+1]
+
+            elif (scanSection == 1):
+                return [robotX+scanGridDistance, robotY]
+
+            elif (scanSection == 2):
+                return [robotX+scanGridDistance, robotY-1]
+
+        return [0, 0]
+    
+    def sendtoarduino(self, arduinomsg):
+        if (self.arduino_thread.arduinoisconnected and arduinomsg):
+            self.arduino_thread.write_to_serial(arduinomsg)
+            return True
+        return False
+    
+    def receivefromarduino(self):
+        while True:
+            serialmsg = self.arduino_thread.read_from_serial()
+            serialmsgArray = serialmsg.split(",")
+            header = serialmsgArray[0]
+
+            if (self.arduino_thread.arduinoisconnected and serialmsg):
+                if(header == 'PC'):
+                    self.sendtopc(serialmsgArray[2])
+                elif(header == 'AN'):
+                    self.sendtoandroid(serialmsgArray[2])
+                else:
+                    print("Incorrect device selected from Arduino: %s" %(serialmsg))
+
+    def sendtopc(self, pcmsg):
+        if (self.pc_thread.pc_is_connected() and pcmsg):
+            self.pc_thread.write_to_PC(pcmsg)
+            
+            return True
+        return False
+
+    def receivefrompc(self):
+            while True:
+                pcmsg = self.pc_thread.read_from_PC()
+                pcmsg = str(pcmsg)
+                pcmsgArray = pcmsg.split(",")
+                header = pcmsgArray[0]
+                if (self.pc_thread.pc_is_connected and pcmsg):
+                    if(header == 'AN'):
+                        self.sendtoandroid(pcmsgArray[2])
+                    elif(header == 'AR'):
+                        self.sendtoarduino(pcmsgArray[2])
+                    #Instruction tells RPI to caoture an image for processing
+                    #elif (header == 'RPI'):
+                        #ImageID = self.captureImg()
+                        #If captureImg returns -1, no image is detected
+                        #if ImageID == "-1":
+                        #    self.sendtopc("None")
+                        #else:
+                        #    self.sendtopc(str(ImageID))
+                    else:
+                        print("Incorrect header from PC: %s" %(pcmsg))
+
+    def sendtoandroid(self,androidmsg):
+        if (self.android_thread.check_connection() and androidmsg):            
+            self.android_thread.write_to_device(androidmsg)
+            
+            return True
+        return False
+
+    def receivefromandroid(self):
+        while True:
+            btmsg = self.android_thread.read_from_device()
+            btmsg = str(btmsg)
+            btmsgArray = btmsg.split(",")
+            header = (btmsgArray[0])
+            
+            if (self.android_thread.check_connection() and btmsg != "None"):
+                if(header == 'PC'):
+                    self.sendtopc(btmsgArray[2])
+                elif(header == 'AR'):
+                    self.sendtoarduino(btmsgArray[2])
+                else:
+                    print("Incorrect device selected from Android: %s" %(btmsg))
+
+
+    def startthread(self):
+        
+        #PC read and write thread
+        read_pc_thread = threading.Thread(target = self.receivefrompc, args = (), name = "read_pc_thread")
+        write_pc_thread = threading.Thread(target = self.sendtopc, args = (), name = "write_pc_thread")
+        
+        #Android read and write thread
+        read_android_thread = threading.Thread(target = self.receivefromandroid, args = (), name = "read_android_thread")
+        write_android_thread = threading.Thread(target = self.sendtoandroid, args = (), name = "write_android_thread")
+
+
+        #Arduino read and write thread
+        read_arduino_thread = threading.Thread(target = self.receivefromarduino, args = (), name = "read_arduino_thread")
+        write_arudino_thread = threading.Thread(target = self.sendtoarduino, args = (), name = "write_arudino_thread")
+  
+        #Set daemon for all thread
+        read_pc_thread.daemon = True
+        write_pc_thread.daemon = True
+
+        read_android_thread.daemon = True
+        write_android_thread.daemon = True
+
+        read_arduino_thread.daemon = True
+        write_arudino_thread.daemon = True
+
+        #start running the thread for PC
+        read_pc_thread.start()
+
+        #start running thread for Android
+        read_android_thread.start()
+
+        #start running thread for Arduino
+        read_arduino_thread.start()
+
+
+    def close_all(self):
+        #close component connection
+        self.pc_thread.close_pc_socket()
+        self.android_thread.disconnect()
+        self.arduino_thread.closeserial()
+        camera.close()
+
+    def maintaining(self):
+        while True:
+            time.sleep(1)
+
+if __name__ == "__main__":
+    #Start the progam
+    print("Starting the program...")
+    main = RPi()
+
+    try:
+        main.startthread()
+        main.maintaining()
+    except KeyboardInterrupt:
+        print("Exiting the program")
+        main.close_all()
+

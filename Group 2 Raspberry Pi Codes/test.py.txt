@@ -1,0 +1,30 @@
+from processedimage import *
+from picamera import PiCamera
+
+import sys
+import time
+
+camera = PiCamera()
+camera.resolution= (640,480)
+
+class RPi():
+    def __init__(self):
+        self.imageRecognition = processing()
+        time.sleep(2)
+    
+        ImageID = self.captureImg()
+        print(ImageID)
+    
+    def captureImg(self):
+        #camera.rotation = 180
+        print("Capturing image in 0.5s...")
+        time.sleep(0.5)
+        camera.capture('captured/image.png')
+        print("Image captured!")
+        imageID = self.imageRecognition.identify()
+        return imageID
+    
+if __name__ == "__main__":
+    #Start the progam
+    print("Starting the program...")
+    main = RPi()

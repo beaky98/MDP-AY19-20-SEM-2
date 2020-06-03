@@ -1,0 +1,147 @@
+#This Main file is meant for exploration runs only multi-threading is used to allow concurrent use of component objects
+from AndroidConnection import *
+from PCConnection import *
+from ArduinoConnection import *
+
+import sys
+import time
+import threading
+
+class RPi(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.debug = False
+
+        #Initialization of component
+        self.android_thread = bluetooth()
+        self.pc_thread = pcComm()
+        self.arduino_thread = arduino()
+
+        self.android_thread.initialize_bluetooth()
+        self.pc_thread.init_pc_comm()
+        self.arduino_thread.init_ser()
+
+        time.sleep(2)
+
+    
+    def sendtoarduino(self, arduinomsg):
+        
+        if (self.arduino_thread.arduinoisconnected and arduinomsg):
+            self.arduino_thread.write_to_serial(arduinomsg)
+            return True
+        return True
+    
+    def receivefromarduino(self):
+        while True:
+            serialmsg = self.arduino_thread.read_from_serial()
+            serialmsgArray = serialmsg.split(",")
+            header = serialmsgArray[0]
+
+            if (self.arduino_thread.arduinoisconnected and serialmsg):
+                if(header == 'PC'):
+                    self.sendtopc(serialmsgArray[2])
+                elif(header == 'AN'):
+                    sersent = self.sendtoandroid(serialmsgArray[2])
+                else:
+                    print("Incorrect device selected from Arduino: %s" %(serialmsg))
+
+    def sendtopc(self, pcmsg):
+        if (self.pc_thread.pc_is_connected() and pcmsg):
+            self.pc_thread.write_to_PC(pcmsg)
+            
+            return True
+        return False
+
+    def receivefrompc(self):
+            while True:
+                pcmsg = self.pc_thread.read_from_PC()
+                pcmsg = str(pcmsg)
+                pcmsgArray = pcmsg.split(",")
+                header = pcmsgArray[0]
+                if (self.pc_thread.pc_is_connected and pcmsg):
+                    if(header == 'AN'):
+                        self.sendtoandroid(pcmsgArray[2])
+                    elif(header == 'AR'):
+                        self.sendtoarduino(pcmsgArray[2])
+                    else:
+                        print("Incorrect header from PC: %s" %(pcmsg))
+
+    def sendtoandroid(self,androidmsg):
+        if (self.android_thread.check_connection() and androidmsg):            
+            self.android_thread.write_to_device(androidmsg)
+            
+            return True
+        return False
+
+    def receivefromandroid(self):
+        while True:
+            btmsg = self.android_thread.read_from_device()
+            btmsg = str(btmsg)
+            btmsgArray = btmsg.split(",")
+            header = (btmsgArray[0])
+            
+            if (self.android_thread.check_connection() and btmsg != "None"):
+                if(header == 'PC'):
+                    self.sendtopc(btmsgArray[2])
+                elif(header == 'AR'):
+                    self.sendtoarduino(btmsgArray[2])
+                else:
+                    print("Incorrect device selected from Android: %s" %(btmsg))
+
+
+    def startthread(self):
+        
+        #PC read and write thread
+        read_pc_thread = threading.Thread(target = self.receivefrompc, args = (), name = "read_pc_thread")
+        write_pc_thread = threading.Thread(target = self.sendtopc, args = (), name = "write_pc_thread")
+        
+        #Android read and write thread
+        read_android_thread = threading.Thread(target = self.receivefromandroid, args = (), name = "read_android_thread")
+        write_android_thread = threading.Thread(target = self.sendtoandroid, args = (), name = "write_android_thread")
+
+
+        #Arduino read and write thread
+        read_arduino_thread = threading.Thread(target = self.receivefromarduino, args = (), name = "read_arduino_thread")
+        write_arudino_thread = threading.Thread(target = self.sendtoarduino, args = (), name = "write_arudino_thread")
+
+        #Set daemon for all thread
+        read_pc_thread.daemon = True
+        write_pc_thread.daemon = True
+
+        read_android_thread.daemon = True
+        write_android_thread.daemon = True
+
+        read_arduino_thread.daemon = True
+        write_arudino_thread.daemon = True
+        
+        #start running the thread for PC
+        read_pc_thread.start()
+
+        #start running thread for Android
+        read_android_thread.start()
+
+        #start running thread for Arduino
+        read_arduino_thread.start()
+
+
+    def close_all(self):
+        #close component connection
+        self.pc_thread.close_pc_socket()
+        self.android_thread.disconnect()
+        self.arduino_thread.closeserial()
+
+    def maintaining(self):
+        while True:
+            time.sleep(1)
+
+if __name__ == "__main__":
+    #Start the progam
+    print("Starting the program...")
+    main = RPi()
+
+    try:
+        main.startthread()
+        main.maintaining()
+    except KeyboardInterrupt:
+        print("Exiting the program")
+        main.close_all()

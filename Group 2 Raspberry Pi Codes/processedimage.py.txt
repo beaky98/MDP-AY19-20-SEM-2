@@ -1,0 +1,235 @@
+import cv2
+import numpy as np
+import sys
+
+class processing(object):
+    
+    def identify(self):
+        
+        red_result = None
+        blue_result = None
+        green_result = None
+        yellow_result = None
+        white_result = None
+        output = []
+        top_left = None
+
+        referenceImg = cv2.imread('captured/image.png')
+        
+        referenceImg = cv2.medianBlur(referenceImg,5)
+        referenceImg = cv2.cvtColor(referenceImg, cv2.COLOR_BGR2HSV    )
+        retT, thT = cv2.threshold(referenceImg, 0, 255, cv2.THRESH_BINARY)
+
+        # red lower mask (0-10)
+        lower_red = np.array([0, 108, 50])
+        upper_red = np.array([10, 255, 255])
+        mask0 = cv2.inRange(referenceImg, lower_red, upper_red)
+
+        # red upper mask (170-180)
+        lower_red = np.array([170,108,50])
+        upper_red = np.array([180,255,255])
+        mask1 = cv2.inRange(referenceImg, lower_red, upper_red)
+
+        # Blue color masking
+        lower_blue = np.array([94, 80, 2])
+        upper_blue = np.array([126, 255, 255])
+        blue_mask = cv2.inRange(referenceImg, lower_blue, upper_blue)
+
+        # Green color masking
+        lower_green = np.array([25, 52, 72])
+        upper_green = np.array([102, 255, 255])
+        green_mask = cv2.inRange(referenceImg, lower_green, upper_green)
+
+        # Yellow color masking
+        lower_yellow = np.array([22, 60, 200])#, np.uint8)
+        upper_yellow = np.array([60, 255, 255])#, np.uint8)
+        yellow_mask = cv2.inRange(referenceImg, lower_yellow, upper_yellow)
+
+        #white color masking
+        sensitivity = 100
+        lower_white = np.array([0, 0, 255-sensitivity])
+        upper_white = np.array([255, sensitivity, 255])
+        white_mask = cv2.inRange(referenceImg, lower_white, upper_white)
+
+        # join my masks
+        red_mask = mask0+mask1
+        kernel = np.ones((3, 3),"uint8")# np.uint8)
+        red = cv2.dilate(red_mask, kernel)
+        blue = cv2.dilate(blue_mask, kernel)
+        green = cv2.dilate(green_mask, kernel)
+        white = cv2.dilate(white_mask, kernel)
+        yellow = cv2.dilate(yellow_mask, kernel)
+
+
+        # Find Canny edges on red
+        red_blurred = cv2.bilateralFilter(red, 11,17,17)
+        red_edged = cv2.Canny(red_blurred, 30, 200)
+
+        #Find Canny edges on blue
+        blue_blurred = cv2.bilateralFilter(blue, 11,17,17)
+        blue_edged = cv2.Canny(blue_blurred, 30, 200)
+
+        #Find Canny edges on green
+        green_blurred = cv2.bilateralFilter(green, 11,17,17)
+        green_edged = cv2.Canny(green_blurred, 30, 200)
+
+        #Find Canny edges on white
+        white_blurred = cv2.bilateralFilter(white, 11,17,17)
+        white_edged = cv2.Canny(white_blurred, 30, 200)
+
+        #Find Canny edges on yellow
+        yellow_blurred = cv2.bilateralFilter(yellow, 11,17,17)
+        yellow_edged = cv2.Canny(yellow_blurred, 30, 200)
+
+
+        # Finding Contours
+        #################################red contours########################################
+        contoursT, hierarchy = cv2.findContours(red_edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        ################################red processing########################################
+        
+        for c in contoursT:
+            area = cv2.contourArea(c)
+
+            #20cm
+            if area > 4000:
+                x, y, w, h = cv2.boundingRect(c)
+                # draw a green rectangle to visualize the bounding rect
+                cv2.rectangle(referenceImg, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                top_left = x
+                letter = referenceImg[y:y+h,x:x+w]
+                approxT = cv2.approxPolyDP(c, 0.01 * cv2.arcLength(c, True), True)
+                cv2.drawContours(referenceImg, [approxT], -1, (0, 255, 0), 3)
+
+                cv2.imwrite('cropped.png', letter)
+
+                if(len(approxT) == 8) or (len(approxT) == 9):
+                    red_result = "11"
+                elif(len(approxT) >= 20) and (len(approxT) <=25):
+                    red_result = "8"
+                elif(((len(approxT) >= 7) and (len(approxT) <=9)) and (area >= 6400)):
+                    red_result = "2"
+            
+        
+        if (red_result is not None):
+            output.append(str(red_result))
+
+        #################################blue contours########################################
+        contoursT1, hierarchy = cv2.findContours(blue_edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        for c in contoursT1:
+            area = cv2.contourArea(c)
+            #20cm
+            if area > 10000:
+                x, y, w, h = cv2.boundingRect(c)
+                hull = cv2.convexHull(c)
+                hull_area = cv2.contourArea(hull)
+                difference = abs(hull_area - area)
+                 
+                # draw a green rectangle to visualize the bounding rect
+                cv2.rectangle(referenceImg, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                top_left = x
+                letter = referenceImg[y:y+h,x:x+w]
+                approxT = cv2.approxPolyDP(c, 0.01 * cv2.arcLength(c, True), True)
+                cv2.drawContours(referenceImg, [approxT], -1, (0, 255, 0), 3)
+                cv2.imwrite('cropped.png', letter)
+
+                if(len(approxT) >= 6) and (len(approxT) <= 10) and (difference >= 60) and (difference <=800):
+                    blue_result = "14"
+                elif(len(approxT) >= 6) and (len(approxT) <= 11) and (area <= 19000):
+                    blue_result = "6"
+                else:
+                    blue_result = "4"
+
+        if (blue_result is not None):
+            output.append(str(blue_result))
+
+
+        #################################green contours########################################
+        contoursT2, hierarchy = cv2.findContours(green_edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        for c in contoursT2:
+            area = cv2.contourArea(c)
+            #20cm
+            if area >= 10000:
+                x, y, w, h = cv2.boundingRect(c)
+                # draw a green rectangle to visualize the bounding rect
+                cv2.rectangle(referenceImg, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                top_left = x
+                letter = referenceImg[y:y+h,x:x+w]
+                approxT = cv2.approxPolyDP(c, 0.01 * cv2.arcLength(c, True), True)
+                cv2.drawContours(referenceImg, [approxT], -1, (0, 255, 0), 3)
+                cv2.imwrite('cropped.png', letter)
+
+                if(len(approxT) >=  10) and (len(approxT) <= 12):
+                    green_result = "12"
+                elif(len(approxT) >=13 ) and (len(approxT) <= 16):
+                    green_result = "7"
+                elif(len(approxT) >= 7) and (len(approxT) <= 9):
+                    green_result = "3"
+
+
+        if (green_result is not None):
+            output.append(str(green_result))
+
+
+        #################################yellow contours########################################
+        contoursT3, hierarchy = cv2.findContours(yellow_edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        for c in contoursT3:
+            area = cv2.contourArea(c)
+            #20cm
+            #if area > 2900:
+            if area > 5000:
+                x, y, w, h = cv2.boundingRect(c)
+                # draw a green rectangle to visualize the bounding rect
+                cv2.rectangle(referenceImg, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                top_left = x
+                letter = referenceImg[y:y+h,x:x+w]
+                approxT = cv2.approxPolyDP(c, 0.01 * cv2.arcLength(c, True), True)
+                cv2.drawContours(referenceImg, [approxT], -1, (0, 255, 0), 3)
+                cv2.imwrite('cropped.png', letter)
+
+                if(len(approxT) >= 10) and (len(approxT) <= 16) and area > 26000:
+                    yellow_result = "5"
+                elif(len(approxT) >= 12) and (len(approxT) <= 14):
+                    yellow_result = "15"
+                elif(len(approxT) >= 15 ) and (len(approxT) <= 20):
+                    yellow_result = "10"
+
+        if (yellow_result is not None):
+            output.append(str(yellow_result))
+
+
+        # #################################white contours########################################
+        contoursT4, hierarchy = cv2.findContours(white_edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        for c in contoursT4:
+            area = cv2.contourArea(c)
+            #20cm
+            if area >= 10000:
+                x, y, w, h = cv2.boundingRect(c)
+                # draw a green rectangle to visualize the bounding rect
+                cv2.rectangle(referenceImg, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                top_left = x
+                letter = referenceImg[y:y+h,x:x+w]
+                approxT = cv2.approxPolyDP(c, 0.01 * cv2.arcLength(c, True), True)
+                cv2.drawContours(referenceImg, [approxT], -1, (0, 255, 0), 3)
+                cv2.imwrite('cropped.png', letter)
+
+                if(len(approxT) >= 16) and (len(approxT) <= 20):
+                    white_result = "13"
+                elif(len(approxT) >=11 ) and (len(approxT) <= 15):
+                    white_result = "9"
+                elif(len(approxT) >= 7) and (len(approxT) <= 10):
+                    white_result = "1"
+
+        
+        if (white_result is not None):
+            output.append(str(white_result))      
+        
+        if len(output)== 1:
+            return output[0]
+        else:
+            return "-1"
+                        
+            
